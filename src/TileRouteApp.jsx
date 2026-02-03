@@ -1,21 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
     Camera,
-    Map,
     Navigation,
     Plus,
     Trash2,
-    Save,
     Clock,
-    FileText,
-    Truck,
     ArrowDownUp,
     Share2,
     Edit2,
     X,
-    MapPin,
-    ChevronRight,
-    MoreHorizontal
+    MapPin
 } from 'lucide-react';
 import logo from './assets/logo.jpg';
 
@@ -214,7 +208,7 @@ export default function TileRouteApp() {
                     {/* 連結線 (Timeline) */}
                     <div className="absolute left-[27px] top-6 bottom-6 w-[1px] bg-zinc-200 -z-10"></div>
 
-                    {stops.map((stop, index) => (
+                    {stops.map((stop) => (
                         <div key={stop.id} className="relative py-3 group">
                             <div className="flex items-start">
 
