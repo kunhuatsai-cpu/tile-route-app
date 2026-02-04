@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useJsApiLoader, Autocomplete } from '@react-google-maps/api';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
     Camera,
@@ -7,13 +6,54 @@ import {
     Plus,
     Trash2,
     Clock,
-    ArrowDownUp,
     Share2,
     Edit2,
     X,
-    MapPin
+    MapPin,
+    Box
 } from 'lucide-react';
-import logo from './assets/logo.jpg';
+
+// --- Custom Hook to Load Google Maps API without external library ---
+const useGoogleMapsLoader = ({ googleMapsApiKey, libraries }) => {
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [loadError, setLoadError] = useState(null);
+
+    useEffect(() => {
+        if (window.google && window.google.maps) {
+            setIsLoaded(true);
+            return;
+        }
+
+        const scriptId = 'google-maps-script';
+        if (document.getElementById(scriptId)) {
+            // Script already exists, just wait for it? 
+            // For simplicity in this standalone, we assume if it's there it's loading
+             const checkGoogle = setInterval(() => {
+                if (window.google && window.google.maps) {
+                    setIsLoaded(true);
+                    clearInterval(checkGoogle);
+                }
+            }, 100);
+            return () => clearInterval(checkGoogle);
+        }
+
+        const script = document.createElement('script');
+        script.id = scriptId;
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=${libraries.join(',')}`;
+        script.async = true;
+        script.defer = true;
+        script.onload = () => setIsLoaded(true);
+        script.onerror = (err) => setLoadError(err);
+
+        document.body.appendChild(script);
+
+        return () => {
+            // Usually we don't remove the script to avoid re-loading issues
+        };
+    }, [googleMapsApiKey, libraries]);
+
+    return { isLoaded, loadError };
+};
 
 // --- 品牌色票與樣式設定 (TilePark Design System) ---
 const THEME = {
@@ -49,9 +89,8 @@ export default function TileRouteApp() {
     const [processingOCR, setProcessingOCR] = useState(false);
     const [isOptimizing, setIsOptimizing] = useState(false);
 
-    // Google Maps Loader
-    const { isLoaded } = useJsApiLoader({
-        id: 'google-map-script',
+    // Custom Google Maps Loader
+    const { isLoaded } = useGoogleMapsLoader({
         googleMapsApiKey: GOOGLE_API_KEY,
         libraries: LIBRARIES
     });
@@ -60,37 +99,46 @@ export default function TileRouteApp() {
     const autocompleteRef = useRef(null);
     const autocompleteInit = useRef(false);
 
+    // --- 核心修正：手動初始化 Google Maps Autocomplete ---
+    // 我們移除了 JSX 中的 <Autocomplete> Wrapper，改為純粹依賴這裡的邏輯。
+    // 這能避免 React Wrapper 與原生 Google Maps 事件在手機 IME 輸入時的衝突。
     useEffect(() => {
         if (isLoaded && inputRef.current && !autocompleteInit.current) {
             autocompleteInit.current = true;
 
-            // Remove any existing autocomplete attributes to prevent browser conflicts
-            inputRef.current.setAttribute('autocomplete', 'off');
-
-            autocompleteRef.current = new window.google.maps.places.Autocomplete(inputRef.current, {
+            // 1. 設定 Autocomplete 參數
+            const options = {
                 fields: ["formatted_address", "name"],
-            });
+                strictBounds: false,
+                types: [] // 允許搜尋所有類型，避免限制過多導致找不到地址
+            };
 
-            // Hack:Prevent Chrome from clearing input on Enter if no suggestion selected
-            // But we actually WANT to grab the suggestion if one is highlighted.
-            // Google Maps Autocomplete handles the 'down arrow' + 'enter' selection internally, 
-            // firing 'place_changed'.
-            // The issue is our React 'onKeyDown' fires BEFORE 'place_changed' finishes updating.
+            // 2. 初始化實例
+            autocompleteRef.current = new window.google.maps.places.Autocomplete(inputRef.current, options);
 
+            // 3. 綁定監聽器
             autocompleteRef.current.addListener("place_changed", () => {
                 const place = autocompleteRef.current.getPlace();
+                
+                // 優先使用完整地址，如果沒有則使用名稱
                 const address = place.formatted_address || place.name;
 
                 if (address && inputRef.current) {
+                    // 直接更新 DOM，不透過 React State，避免重新渲染導致鍵盤收起
                     inputRef.current.value = address;
-                    // Optional: Auto-trigger add? 
-                    // Let's decide NOT to auto-trigger add on map selection for safety,
-                    // letting user press Enter one more time to confirm.
-                    // Or keep it manual. The current user request implies "input map still has problems",
-                    // often meaning "I type Chinese, press Enter to pick word, and it submits form".
+                    
+                    // 可選：如果你希望點選地址後自動加入列表，可以在這裡呼叫 handleAddStop
+                    // 但為了避免誤觸，通常建議保留手動按「+」的步驟
                 }
             });
         }
+        
+        // Cleanup function (Optional but good practice)
+        return () => {
+             if (autocompleteRef.current) {
+                 window.google.maps.event.clearInstanceListeners(autocompleteRef.current);
+             }
+        };
     }, [isLoaded]);
 
     // 編輯模式
@@ -98,8 +146,8 @@ export default function TileRouteApp() {
     const [editName, setEditName] = useState('');
     const [editNote, setEditNote] = useState('');
 
-    // --- 功能邏輯 ---
-    const isComposing = useRef(false); // Ref to track IME composition state
+    // --- IME (輸入法) 狀態追蹤 ---
+    const isComposing = useRef(false);
 
     const handleCompositionStart = () => {
         isComposing.current = true;
@@ -111,7 +159,7 @@ export default function TileRouteApp() {
 
     const handleKeyDown = (e) => {
         if (e.key === 'Enter') {
-            // If IME is composing, OR the event explicitly says so (modern browsers)
+            // 如果正在選字 (Composing)，不要送出表單
             if (isComposing.current || e.nativeEvent.isComposing) {
                 return;
             }
@@ -154,13 +202,14 @@ export default function TileRouteApp() {
     };
 
     const handleAddStop = () => {
+        // 直接從 DOM 讀取值，避免 State 更新造成的 Re-render
         const address = inputRef.current ? inputRef.current.value : '';
         if (!address.trim()) return;
 
         const newId = Date.now();
         const newStop = {
             id: newId,
-            address: address, // Use the value from ref
+            address: address,
             type: 'stop',
             name: '新規客戶',
             note: '',
@@ -168,11 +217,12 @@ export default function TileRouteApp() {
         };
         setStops(prev => [...prev, newStop]);
 
-        // Clear input manually
+        // 清空輸入框
         if (inputRef.current) {
             inputRef.current.value = '';
         }
-        // setNewAddress(''); // No longer used
+        
+        // 自動開啟編輯視窗，方便填寫客戶名稱
         setTimeout(() => openEditModal(newStop), 100);
     };
 
@@ -213,7 +263,6 @@ export default function TileRouteApp() {
             const response = await result.response;
             const text = response.text();
 
-            // Clean up potentially formatted response
             const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
             const optimizedIds = JSON.parse(cleanedText);
 
@@ -226,7 +275,6 @@ export default function TileRouteApp() {
                     }
                 });
 
-                // Append any stops that might have been missed by AI (safety net)
                 deliveryStops.forEach(s => {
                     if (!newSortedStops.find(ns => ns.id === s.id)) {
                         newSortedStops.push(s);
@@ -268,14 +316,23 @@ export default function TileRouteApp() {
         <div className={`flex flex-col h-screen ${THEME.bg} text-zinc-800 font-sans max-w-md mx-auto shadow-2xl relative border-x border-zinc-200`}>
 
             {/* Debug Banner */}
-            <div className="bg-red-600 text-white text-center py-2 font-bold text-lg animate-pulse">
-                DEBUG MODE v4 - IME FIXED
+            <div className="bg-emerald-600 text-white text-center py-2 font-bold text-xs">
+                SYSTEM ONLINE: IME FIXED (Mobile Ready)
             </div>
 
             {/* Header: 日式簡約風格 */}
             <header className="bg-white pt-6 pb-4 px-6 border-b border-zinc-100 z-20 flex flex-col items-center relative">
-                <div className="flex flex-col items-center py-2 select-none">
-                    <img src={logo} alt="Tile Park Logo" className="h-16 object-contain" />
+                <div className="flex flex-col items-center py-2 select-none group cursor-default">
+                    {/* Logo Replacement: Text Based */}
+                    <div className="flex items-center space-x-2">
+                        <div className="bg-red-700 text-white p-2 rounded-sm">
+                            <Box className="h-6 w-6" />
+                        </div>
+                        <div className="flex flex-col items-start">
+                             <span className="text-xl font-bold tracking-tight leading-none">TilePark</span>
+                             <span className="text-[10px] text-zinc-400 font-serif tracking-widest">CERAMIC LOGISTICS</span>
+                        </div>
+                    </div>
                 </div>
 
                 {/* 出發時間小工具 */}
@@ -401,42 +458,30 @@ export default function TileRouteApp() {
                     ))}
                 </div>
 
-                {/* 手動輸入區 (極簡風格) */}
+                {/* 手動輸入區 (已修正 IME 問題) */}
                 <div className="mt-8 mb-4">
                     <div className="relative">
                         {isLoaded ? (
-                            <Autocomplete
-                                onLoad={(autocomplete) => {
-                                    autocompleteRef.current = autocomplete;
-                                    // Prevent browser autocomplete interference
-                                    if (inputRef.current) inputRef.current.setAttribute('autocomplete', 'off');
-                                }}
-                                onPlaceChanged={() => {
-                                    if (autocompleteRef.current) {
-                                        const place = autocompleteRef.current.getPlace();
-                                        const address = place.formatted_address || place.name;
-                                        if (address && inputRef.current) {
-                                            inputRef.current.value = address;
-                                        }
-                                    }
-                                }}
-                            >
-                                <input
-                                    ref={inputRef}
-                                    type="text"
-                                    placeholder="新增地址 (搜尋地點 v3)"
-                                    className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
-                                    onCompositionStart={handleCompositionStart}
-                                    onCompositionEnd={handleCompositionEnd}
-                                    onKeyDown={handleKeyDown}
-                                />
-                            </Autocomplete>
+                            // 重要修正：移除 <Autocomplete> Wrapper，只保留純 input
+                            // Google Maps 邏輯完全由 useEffect 接管
+                            <input
+                                ref={inputRef}
+                                type="text"
+                                placeholder="新增地址 (請輸入...)"
+                                // 使用 text-base (16px) 可以防止 iOS 自動放大畫面
+                                className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-base focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300 rounded-none"
+                                onCompositionStart={handleCompositionStart}
+                                onCompositionEnd={handleCompositionEnd}
+                                onKeyDown={handleKeyDown}
+                                // 關閉瀏覽器預設的自動完成，避免干擾
+                                autoComplete="off"
+                            />
                         ) : (
                             <input
                                 type="text"
-                                placeholder="新增地址 (Loading Maps...)"
+                                placeholder="地圖載入中 (Loading...)"
                                 disabled
-                                className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
+                                className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-base focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
                             />
                         )}
 
@@ -529,7 +574,7 @@ export default function TileRouteApp() {
                 </div>
             )}
 
-            {/* 拍照模擬 (保持原樣，僅修改文字風格) */}
+            {/* 拍照模擬 */}
             {isCameraOpen && (
                 <div className="absolute inset-0 bg-black z-50 flex flex-col items-center justify-center">
                     {!processingOCR ? (
