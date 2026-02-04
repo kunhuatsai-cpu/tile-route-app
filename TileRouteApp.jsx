@@ -58,9 +58,15 @@ export default function TileRouteApp() {
 
     const inputRef = useRef(null);
     const autocompleteRef = useRef(null);
+    const autocompleteInit = useRef(false);
 
     useEffect(() => {
-        if (isLoaded && inputRef.current) {
+        if (isLoaded && inputRef.current && !autocompleteInit.current) {
+            autocompleteInit.current = true;
+
+            // Remove any existing autocomplete attributes to prevent browser conflicts
+            inputRef.current.setAttribute('autocomplete', 'off');
+
             autocompleteRef.current = new window.google.maps.places.Autocomplete(inputRef.current, {
                 fields: ["formatted_address", "name"],
             });
@@ -366,7 +372,7 @@ export default function TileRouteApp() {
                             <input
                                 ref={inputRef}
                                 type="text"
-                                placeholder="新增地址 (Google Maps 検索)"
+                                placeholder="新增地址 (搜尋地點 v3)"
                                 className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
                                 onKeyDown={(e) => e.key === 'Enter' && handleAddStop()}
                             />
