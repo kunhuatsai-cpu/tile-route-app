@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useJsApiLoader, Autocomplete } from '@react-google-maps/api';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
     Camera,
     Navigation,
@@ -31,6 +33,12 @@ const MOCK_OCR_RESULTS = [
     { id: 'ocr-3', address: '台中市南屯區大墩十二街122號', customer: '威麟磁藝', note: '特殊規 10箱 - 代收貨款 $5000' },
 ];
 
+const LIBRARIES = ['places'];
+const GOOGLE_API_KEY = "AIzaSyCpxGiyfgmY_jaF27zm_HLfkERPh78zyrQ"; // User provided key
+
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
+
 export default function TileRouteApp() {
     const [stops, setStops] = useState([
         { id: 'start', address: '新北市板橋區金門街215巷78-5號', type: 'start', name: 'TilePark 本社', note: '出發前確認庫存單據', validated: true },
@@ -39,6 +47,34 @@ export default function TileRouteApp() {
     const [isCameraOpen, setIsCameraOpen] = useState(false);
     const [departureTime, setDepartureTime] = useState('08:30');
     const [processingOCR, setProcessingOCR] = useState(false);
+    const [isOptimizing, setIsOptimizing] = useState(false);
+
+    // Google Maps Loader
+    const { isLoaded } = useJsApiLoader({
+        id: 'google-map-script',
+        googleMapsApiKey: GOOGLE_API_KEY,
+        libraries: LIBRARIES
+    });
+
+    const [autocomplete, setAutocomplete] = useState(null);
+
+    const onLoadAutocomplete = (autocompleteInstance) => {
+        setAutocomplete(autocompleteInstance);
+    };
+
+    const onPlaceChanged = () => {
+        if (autocomplete !== null) {
+            const place = autocomplete.getPlace();
+            if (place.formatted_address) {
+                setNewAddress(place.formatted_address);
+            } else if (place.name) {
+                // Fallback attempt if formatted_address is missing (rare for valid places)
+                setNewAddress(place.name);
+            }
+        } else {
+            console.log('Autocomplete is not loaded yet!');
+        }
+    };
 
     // 編輯模式
     const [editingStop, setEditingStop] = useState(null);
@@ -101,25 +137,71 @@ export default function TileRouteApp() {
         setStops(prev => prev.filter(s => s.id !== id));
     };
 
-    const handleOptimize = () => {
-        const startNode = stops.find(s => s.type === 'start');
-        const others = stops.filter(s => s.type !== 'start');
-        const sortedOthers = [...others].sort((a, b) => {
-            const score = (addr) => {
-                if (addr.includes('板橋')) return 1;
-                if (addr.includes('蘆洲')) return 2;
-                if (addr.includes('台北')) return 3;
-                if (addr.includes('鶯歌')) return 4;
-                if (addr.includes('桃園') || addr.includes('八德')) return 5;
-                if (addr.includes('新竹') || addr.includes('竹北')) return 6;
-                if (addr.includes('台中')) return 7;
-                return 10;
-            };
-            return score(a.address) - score(b.address);
-        });
-        setStops([startNode, ...sortedOthers]);
-        // 使用更柔和的通知方式 (實際開發建議用 Toast)
-        alert('配送路徑已最佳化 (配送ルートが最適化されました)。\n行程已依照最佳路徑重新排序 (抗塞車)。');
+    const handleAIOptimize = async () => {
+        if (stops.length < 3) {
+            alert("請至少加入 2 個目的地以進行排序 (2つ以上の目的地を追加してください)");
+            return;
+        }
+
+        setIsOptimizing(true);
+        try {
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+            const startNode = stops.find(s => s.type === 'start');
+            const deliveryStops = stops.filter(s => s.type !== 'start');
+
+            const prompt = `
+                You are a logistics route optimization expert.
+                I have a start point and a list of delivery stops.
+                Please reorder the "delivery stops" to create the most efficient valid driving route starting from the start point.
+                
+                Start Point: ${JSON.stringify({ id: startNode.id, address: startNode.address, name: startNode.name })}
+                
+                Delivery Stops (to be reordered): 
+                ${JSON.stringify(deliveryStops.map(s => ({ id: s.id, address: s.address, name: s.name, note: s.note })))}
+
+                Consider driving distance and logic.
+                Return ONLY a valid JSON array of strings, where each string is the 'id' of the delivery stops in the optimized order.
+                Do NOT include the start point in the returned array.
+                Do NOT include markdown formatting (like \`\`\`json). Just the raw JSON array.
+            `;
+
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const text = response.text();
+
+            // Clean up potentially formatted response
+            const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const optimizedIds = JSON.parse(cleanedText);
+
+            if (Array.isArray(optimizedIds)) {
+                const newSortedStops = [startNode];
+                optimizedIds.forEach(id => {
+                    const originalStop = deliveryStops.find(s => s.id === id || String(s.id) === String(id));
+                    if (originalStop) {
+                        newSortedStops.push(originalStop);
+                    }
+                });
+
+                // Append any stops that might have been missed by AI (safety net)
+                deliveryStops.forEach(s => {
+                    if (!newSortedStops.find(ns => ns.id === s.id)) {
+                        newSortedStops.push(s);
+                    }
+                });
+
+                setStops(newSortedStops);
+                alert('✨ AI 智慧路徑最佳化完成！\n(AIルート最適化が完了しました)');
+            } else {
+                throw new Error("Invalid AI response format");
+            }
+
+        } catch (error) {
+            console.error("AI Optimization Error:", error);
+            alert("AI 最佳化失敗，請稍後再試。\n(AI最適化に失敗しました: " + error.message + ")");
+        } finally {
+            setIsOptimizing(false);
+        }
     };
 
     const handleExportToGoogleMaps = () => {
@@ -194,12 +276,24 @@ export default function TileRouteApp() {
                         <h2 className="text-sm font-bold text-zinc-800 tracking-wider uppercase">Delivery List</h2>
                         <p className="text-[10px] text-zinc-400">配送清單 <span className="font-serif ml-1">(配送リスト)</span> - {stops.length} 件</p>
                     </div>
+
+                    {/* AI Optimize Button */}
                     <button
-                        onClick={handleOptimize}
-                        className="flex items-center text-xs text-zinc-600 hover:text-zinc-900 transition-colors bg-zinc-100 px-3 py-1.5 rounded-full"
+                        onClick={handleAIOptimize}
+                        disabled={isOptimizing}
+                        className={`flex items-center text-xs text-white transition-all shadow-md px-3 py-1.5 rounded-full ${isOptimizing ? 'bg-zinc-400 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:shadow-lg active:scale-95'}`}
                     >
-                        <ArrowDownUp className="h-3 w-3 mr-1.5" />
-                        最佳化 <span className="text-[10px] text-zinc-400 ml-1">(最適化)</span>
+                        {isOptimizing ? (
+                            <>
+                                <div className="animate-spin h-3 w-3 border-2 border-white/30 border-t-white rounded-full mr-1.5"></div>
+                                AI 運算中...
+                            </>
+                        ) : (
+                            <>
+                                <span className="mr-1.5">✨</span>
+                                AI 最佳化 <span className="text-[10px] opacity-80 ml-1 font-normal">(AI最適化)</span>
+                            </>
+                        )}
                     </button>
                 </div>
 
@@ -262,14 +356,31 @@ export default function TileRouteApp() {
                 {/* 手動輸入區 (極簡風格) */}
                 <div className="mt-8 mb-4">
                     <div className="relative">
-                        <input
-                            type="text"
-                            value={newAddress}
-                            onChange={(e) => setNewAddress(e.target.value)}
-                            placeholder="新增地址 (新しい住所を追加)"
-                            className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
-                            onKeyDown={(e) => e.key === 'Enter' && handleAddStop()}
-                        />
+                        {isLoaded ? (
+                            <Autocomplete
+                                onLoad={onLoadAutocomplete}
+                                onPlaceChanged={onPlaceChanged}
+                            >
+                                <input
+                                    type="text"
+                                    value={newAddress}
+                                    onChange={(e) => setNewAddress(e.target.value)}
+                                    placeholder="新增地址 (Google Maps 検索)"
+                                    className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
+                                    onKeyDown={(e) => e.key === 'Enter' && handleAddStop()}
+                                />
+                            </Autocomplete>
+                        ) : (
+                            <input
+                                type="text"
+                                value={newAddress}
+                                onChange={(e) => setNewAddress(e.target.value)}
+                                placeholder="新增地址 (Loading Maps...)"
+                                className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
+                                onKeyDown={(e) => e.key === 'Enter' && handleAddStop()}
+                            />
+                        )}
+
                         <button
                             onClick={handleAddStop}
                             className="absolute right-0 top-2 p-1 text-zinc-400 hover:text-zinc-900"
