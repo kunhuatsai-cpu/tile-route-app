@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useJsApiLoader } from '@react-google-maps/api';
+import { useJsApiLoader, Autocomplete } from '@react-google-maps/api';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
     Camera,
@@ -405,15 +405,32 @@ export default function TileRouteApp() {
                 <div className="mt-8 mb-4">
                     <div className="relative">
                         {isLoaded ? (
-                            <input
-                                ref={inputRef}
-                                type="text"
-                                placeholder="新增地址 (搜尋地點 v3)"
-                                className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
-                                onCompositionStart={handleCompositionStart}
-                                onCompositionEnd={handleCompositionEnd}
-                                onKeyDown={handleKeyDown}
-                            />
+                            <Autocomplete
+                                onLoad={(autocomplete) => {
+                                    autocompleteRef.current = autocomplete;
+                                    // Prevent browser autocomplete interference
+                                    if (inputRef.current) inputRef.current.setAttribute('autocomplete', 'off');
+                                }}
+                                onPlaceChanged={() => {
+                                    if (autocompleteRef.current) {
+                                        const place = autocompleteRef.current.getPlace();
+                                        const address = place.formatted_address || place.name;
+                                        if (address && inputRef.current) {
+                                            inputRef.current.value = address;
+                                        }
+                                    }
+                                }}
+                            >
+                                <input
+                                    ref={inputRef}
+                                    type="text"
+                                    placeholder="新增地址 (搜尋地點 v3)"
+                                    className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
+                                    onCompositionStart={handleCompositionStart}
+                                    onCompositionEnd={handleCompositionEnd}
+                                    onKeyDown={handleKeyDown}
+                                />
+                            </Autocomplete>
                         ) : (
                             <input
                                 type="text"
