@@ -71,11 +71,23 @@ export default function TileRouteApp() {
                 fields: ["formatted_address", "name"],
             });
 
+            // Hack:Prevent Chrome from clearing input on Enter if no suggestion selected
+            // But we actually WANT to grab the suggestion if one is highlighted.
+            // Google Maps Autocomplete handles the 'down arrow' + 'enter' selection internally, 
+            // firing 'place_changed'.
+            // The issue is our React 'onKeyDown' fires BEFORE 'place_changed' finishes updating.
+
             autocompleteRef.current.addListener("place_changed", () => {
                 const place = autocompleteRef.current.getPlace();
                 const address = place.formatted_address || place.name;
+
                 if (address && inputRef.current) {
                     inputRef.current.value = address;
+                    // Optional: Auto-trigger add? 
+                    // Let's decide NOT to auto-trigger add on map selection for safety,
+                    // letting user press Enter one more time to confirm.
+                    // Or keep it manual. The current user request implies "input map still has problems",
+                    // often meaning "I type Chinese, press Enter to pick word, and it submits form".
                 }
             });
         }
@@ -87,6 +99,25 @@ export default function TileRouteApp() {
     const [editNote, setEditNote] = useState('');
 
     // --- 功能邏輯 ---
+    const isComposing = useRef(false); // Ref to track IME composition state
+
+    const handleCompositionStart = () => {
+        isComposing.current = true;
+    };
+
+    const handleCompositionEnd = () => {
+        isComposing.current = false;
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            // If IME is composing, OR the event explicitly says so (modern browsers)
+            if (isComposing.current || e.nativeEvent.isComposing) {
+                return;
+            }
+            handleAddStop();
+        }
+    };
 
     const openEditModal = (stop) => {
         setEditingStop(stop);
@@ -236,6 +267,11 @@ export default function TileRouteApp() {
     return (
         <div className={`flex flex-col h-screen ${THEME.bg} text-zinc-800 font-sans max-w-md mx-auto shadow-2xl relative border-x border-zinc-200`}>
 
+            {/* Debug Banner */}
+            <div className="bg-red-600 text-white text-center py-2 font-bold text-lg animate-pulse">
+                DEBUG MODE v4 - IME FIXED
+            </div>
+
             {/* Header: 日式簡約風格 */}
             <header className="bg-white pt-6 pb-4 px-6 border-b border-zinc-100 z-20 flex flex-col items-center relative">
                 <div className="flex flex-col items-center py-2 select-none">
@@ -374,7 +410,9 @@ export default function TileRouteApp() {
                                 type="text"
                                 placeholder="新增地址 (搜尋地點 v3)"
                                 className="w-full bg-transparent border-b border-zinc-300 py-3 pl-2 pr-10 text-sm focus:outline-none focus:border-zinc-800 transition-colors placeholder:text-zinc-300"
-                                onKeyDown={(e) => e.key === 'Enter' && handleAddStop()}
+                                onCompositionStart={handleCompositionStart}
+                                onCompositionEnd={handleCompositionEnd}
+                                onKeyDown={handleKeyDown}
                             />
                         ) : (
                             <input
